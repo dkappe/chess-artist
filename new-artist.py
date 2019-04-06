@@ -269,7 +269,7 @@ class Analyze():
         if not side:
             engScore = -1 * engScore
             posScore = -1 * posScore
-        varComment = 'Interesting is'
+        varComment = 'Also playable is'
         if engScore - posScore > 5 * DRAW_SCORE:
             varComment = 'Excellent is'
         elif engScore - posScore > DRAW_SCORE:
