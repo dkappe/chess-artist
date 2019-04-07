@@ -138,6 +138,7 @@ class Analyze():
         self.writeCnt = 0
         self.engIdName = self.GetEngineIdName()
         self.eng2IdName = self.GetEngine2IdName()
+        self.latestEngine = "engine"
 
     def UciToSanMove(self, pos, uciMove):
         """ Returns san move given uci move """
@@ -274,7 +275,7 @@ class Analyze():
             varComment = 'Excellent is'
         elif engScore - posScore > DRAW_SCORE:
             varComment = 'Better is'
-        return varComment
+        return self.latestEngine + " - " + varComment
 
     def WriteSanMove(self, side, moveNumber, sanMove):
         """ Write moves only in the output file """
@@ -678,9 +679,11 @@ class Analyze():
         pawn_value = P+p
         if piece_value >= 50 and pawn_value >= 12:
             print("eng1")
+            self.latestEngine = self.engIdName
             return self.eng, self.engOpt
         else:
             print("eng2")
+            self.latestEngine = self.eng2IdName
             return self.eng2, self.eng2Opt
 
     def GetEngineIdName(self):
