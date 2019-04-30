@@ -37,6 +37,10 @@ import math
 import chess
 from chess import pgn
 
+# Logging
+def log(msg):
+    print(msg)
+
 # Constants
 APP_NAME = 'Chess Artist'
 APP_VERSION = '0.2.0'
@@ -50,7 +54,7 @@ PGN_FILE = 2
 DRAW_SCORE = +0.15
 SLIGHT_SCORE = +0.75
 MODERATE_SCORE = +1.50
-DECISIVE_SCORE = +3.0
+DECISIVE_SCORE = +7.0
 COMPLEXITY_MINIMUM_TIME = 2000
 DEFAULT_HASH = 32
 DEFAULT_THREADS = 1
@@ -64,7 +68,7 @@ def DeleteFile(fn):
     if os.path.isfile(fn):
         os.remove(fn)
 
-def CheckFiles(infn, outfn, engfn):
+def CheckFiles(infn, outfn, engfn, eng2fn):
     """ Quit program if infn is missing.
         Quit program if infn and outfn is the same.
         Quit program if engfn is missing.
@@ -83,6 +87,10 @@ def CheckFiles(infn, outfn, engfn):
     # engine file is missing.
     if not os.path.isfile(engfn):
         print('Error! %s is missing' %(engfn))
+        sys.exit(1)
+
+    if not os.path.isfile(eng2fn):
+        print('Error! %s is missing' %(eng2fn))
         sys.exit(1)
 
     # If file is not epd or pgn
@@ -104,25 +112,33 @@ def GetOptionValue(opt, optName, var):
             var = int(var)
         elif optName == '-engthreads':
             var = int(var)
+        elif optName == '-eng2hash':
+            var = int(var)
+        elif optName == '-eng2threads':
+            var = int(var)
         elif optName == '-movestart':
             var = int(var)
     return var
 
 class Analyze():
     """ An object that will read and annotate games in a pgn file """
-    def __init__(self, infn, outfn, eng, **opt):
+    def __init__(self, infn, outfn, eng, eng2, **opt):
         """ Initialize """
         self.infn = infn
         self.outfn = outfn
         self.eng = eng
+        self.eng2 = eng2
         self.bookOpt = opt['-book']
         self.evalOpt = opt['-eval']
         self.moveTimeOpt = opt['-movetime']
         self.moveStartOpt = opt['-movestart']
         self.jobOpt = opt['-job']
         self.engOpt = opt['-engoptions']
+        self.eng2Opt = opt['-eng2options']
         self.writeCnt = 0
         self.engIdName = self.GetEngineIdName()
+        self.eng2IdName = self.GetEngine2IdName()
+        self.latestEngine = "engine"
 
     def UciToSanMove(self, pos, uciMove):
         """ Returns san move given uci move """
@@ -133,8 +149,9 @@ class Analyze():
 
     def PrintEngineIdName(self):
         """ Prints engine id name """
-        print('Analyzing engine: %s' %(self.engIdName))
-
+        print('Analyzing engine 1: %s' %(self.engIdName))
+        print('Analyzing engine 2: %s' %(self.eng2IdName))
+        
     def GetGoodNag(self, side, posScore, engScore,
                    complexityNumber, moveChanges):
         """ Returns !!, !, !? depending on the player score, analyzing
@@ -145,6 +162,9 @@ class Analyze():
         if not side:
             posScore = -1 * posScore
             engScore = -1 * engScore
+
+        log("posScore {}".format(posScore))
+        log("engScore {}".format(engScore))
 
         # Set default NAG, GUI will not display this.
         moveNag = '$0'
@@ -250,12 +270,12 @@ class Analyze():
         if not side:
             engScore = -1 * engScore
             posScore = -1 * posScore
-        varComment = ''
+        varComment = 'Also playable is'
         if engScore - posScore > 5 * DRAW_SCORE:
             varComment = 'Excellent is'
         elif engScore - posScore > DRAW_SCORE:
             varComment = 'Better is'
-        return varComment
+        return self.latestEngine + " - " + varComment
 
     def WriteSanMove(self, side, moveNumber, sanMove):
         """ Write moves only in the output file """
@@ -640,6 +660,32 @@ class Analyze():
         pawns = P+p
         return wmat, bmat, queens, pawns
     
+    def GetEngineForStage(self, fen):
+                # Get piece field of fen
+        pieces = fen.split()[0]
+
+        # Count pieces
+        Q = pieces.count('Q')
+        q = pieces.count('q')
+        R = pieces.count('R')
+        r = pieces.count('r')
+        B = pieces.count('B')
+        b = pieces.count('b')
+        N = pieces.count('N')
+        n = pieces.count('n')
+        P = pieces.count('P')
+        p = pieces.count('p')
+        piece_value = 9*(Q+q) + 5*(R+r) + 3*(B+N+b+n)
+        pawn_value = P+p
+        if piece_value >= 50 and pawn_value >= 12:
+            print("eng1")
+            self.latestEngine = self.engIdName
+            return self.eng, self.engOpt
+        else:
+            print("eng2")
+            self.latestEngine = self.eng2IdName
+            return self.eng2, self.eng2Opt
+
     def GetEngineIdName(self):
         """ Returns the engine id name """
         engineIdName = self.eng[0:-4]
@@ -666,6 +712,35 @@ class Analyze():
         p.stdin.write('quit\n')
         p.communicate()
         return engineIdName
+
+    def GetEngine2IdName(self):
+        """ Returns the engine id name """
+        engineIdName = self.eng2[0:-4]
+
+        # Run the engine
+        p = subprocess.Popen(self.eng2, stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+        # Send command to engine.
+        p.stdin.write("uci\n")
+        
+        # Parse engine replies.
+        for eline in iter(p.stdout.readline, ''):
+            line = eline.strip()
+
+            # Save id name.
+            if 'id name ' in line:
+                idName = line.split()
+                engineIdName = ' '.join(idName[2:])            
+            if "uciok" in line:           
+                break
+                
+        # Quit the engine
+        p.stdin.write('quit\n')
+        p.communicate()
+        return engineIdName
+
+
 
     def GetCerebellumBookMove(self, pos):
         """ Returns a move from cerebellum book """
@@ -791,7 +866,8 @@ class Analyze():
         score = TEST_SEARCH_SCORE
 
         # Run the engine.
-        p = subprocess.Popen(self.eng, stdin=subprocess.PIPE,
+        eng, engOpt = self.GetEngineForStage(pos)
+        p = subprocess.Popen(eng, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         # Send command to engine.
@@ -804,7 +880,8 @@ class Analyze():
                 break
 
         # Set engine options
-        self.SetEngineOptions(p, self.engOpt)
+            
+        self.SetEngineOptions(p, engOpt)
                 
         # Send command to engine.
         p.stdin.write("isready\n")
@@ -844,7 +921,8 @@ class Analyze():
         bestMove = None
 
         # Run the engine.
-        p = subprocess.Popen(self.eng, stdin=subprocess.PIPE,
+        eng, engOpt = self.GetEngineForStage(pos)
+        p = subprocess.Popen(eng, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         # Send command to engine.
@@ -857,7 +935,7 @@ class Analyze():
                 break
 
         # Set engine options
-        self.SetEngineOptions(p, self.engOpt)
+        self.SetEngineOptions(p, engOpt)
                 
         # Send command to engine.
         p.stdin.write("isready\n")
@@ -911,7 +989,8 @@ class Analyze():
                                 self.moveTimeOpt >= COMPLEXITY_MINIMUM_TIME
 
         # Run the engine.
-        p = subprocess.Popen(self.eng, stdin=subprocess.PIPE,
+        eng, engOpt = self.GetEngineForStage(pos)
+        p = subprocess.Popen(eng, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         # Send command to engine.
@@ -924,7 +1003,7 @@ class Analyze():
                 break
 
         # Set engine options
-        self.SetEngineOptions(p, self.engOpt)
+        self.SetEngineOptions(p, engOpt)
                 
         # Send command to engine.
         p.stdin.write("isready\n")
@@ -1110,7 +1189,8 @@ class Analyze():
         scoreCp = TEST_SEARCH_SCORE
 
         # Run the engine.
-        p = subprocess.Popen(self.eng, stdin=subprocess.PIPE,
+        eng, engOpt = self.GetEngineForStage(pos)
+        p = subprocess.Popen(eng, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         # Send command to engine.
@@ -1123,7 +1203,7 @@ class Analyze():
                 break
 
         # Set engine options
-        self.SetEngineOptions(p, self.engOpt)
+        self.SetEngineOptions(p, engOpt)
                 
         # Send command to engine.
         p.stdin.write("isready\n")
@@ -1183,7 +1263,8 @@ class Analyze():
         depthSearched = TEST_SEARCH_DEPTH
 
         # Run the engine.
-        p = subprocess.Popen(self.eng, stdin=subprocess.PIPE,
+        eng, engOpt = self.GetEngineForStage(pos)
+        p = subprocess.Popen(eng, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         # Send command to engine.
@@ -1196,7 +1277,7 @@ class Analyze():
                 break
 
         # Set engine options
-        self.SetEngineOptions(p, self.engOpt)
+        self.SetEngineOptions(p, engOpt)
                 
         # Send command to engine.
         p.stdin.write("isready\n")
@@ -1256,7 +1337,8 @@ class Analyze():
         scoreP = TEST_SEARCH_SCORE
 
         # Run the engine.
-        p = subprocess.Popen(self.eng, stdin=subprocess.PIPE,
+        eng, engOpt = self.GetEngineForStage(pos)
+        p = subprocess.Popen(eng, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
         # Send command to engine.
@@ -1269,7 +1351,7 @@ class Analyze():
                 break
 
         # Set engine options
-        self.SetEngineOptions(p, self.engOpt)
+        self.SetEngineOptions(p, engOpt)
                 
         # Send command to engine.
         p.stdin.write("isready\n")
@@ -1388,7 +1470,8 @@ class Analyze():
 
             # Write the annotator tag.
             with open(self.outfn, 'a+') as f:
-                f.write('[Annotator "%s"]\n\n' %(engineIdName))
+                both = "leela+sf"
+                f.write('[Annotator "%s"]\n\n' %(both))
 
             # Before the movetext are written, add a comment of whether
             # move comments are from static evaluation or search score of the engine.
@@ -1738,6 +1821,7 @@ def main(argv):
     inputFile = 'src.pgn'
     outputFile = 'out_src.pgn'
     engineName = 'engine.exe'
+    engine2Name = 'engine.exe'
     bookOption = 'none'   # ['none', 'cerebellum', 'polyglot']
     evalOption = 'static' # ['none', 'static', 'search']
     cereBookFile = 'Cerebellum_Light.bin'
@@ -1745,6 +1829,7 @@ def main(argv):
     moveStartOption = 8
     jobOption = 'analyze' # ['none' 'analyze', 'test']
     engOption = 'none'
+    eng2Option = 'none'
     
     # Evaluate the command line options.
     options = EvaluateOptions(argv)
@@ -1752,15 +1837,17 @@ def main(argv):
         inputFile = GetOptionValue(options, '-infile', inputFile)
         outputFile = GetOptionValue(options, '-outfile', outputFile)
         engineName = GetOptionValue(options, '-eng', engineName)
+        engine2Name = GetOptionValue(options, '-eng2', engine2Name)
         bookOption = GetOptionValue(options, '-book', bookOption)
         evalOption = GetOptionValue(options, '-eval', evalOption)
         moveTimeOption = GetOptionValue(options, '-movetime', moveTimeOption)
         moveStartOption = GetOptionValue(options, '-movestart', moveStartOption)
         jobOption = GetOptionValue(options, '-job', jobOption)
         engOption = GetOptionValue(options, '-engoptions', engOption)
+        eng2Option = GetOptionValue(options, '-eng2options', eng2Option)
 
     # Check input, output and engine files.
-    CheckFiles(inputFile, outputFile, engineName)
+    CheckFiles(inputFile, outputFile, engineName, engine2Name)
     
     # Disable use of cerebellum book when Cerebellum_Light.bin is missing.
     if bookOption == 'cerebellum':
@@ -1799,11 +1886,12 @@ def main(argv):
                '-movetime': moveTimeOption,
                '-movestart': moveStartOption,
                '-job': jobOption,
-               '-engoptions': engOption
+               '-engoptions': engOption,
+               '-eng2options': eng2Option
                }
 
     # Create an object of class Analyze.
-    g = Analyze(inputFile, outputFile, engineName, **options)
+    g = Analyze(inputFile, outputFile, engineName, engine2Name, **options)
     g.PrintEngineIdName()
 
     # Process input file depending on the format and options
